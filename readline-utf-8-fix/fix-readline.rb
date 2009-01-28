@@ -148,7 +148,6 @@ puts "Path: #{selected.lib_path}"
 
 ## Generate patch
 
-
 puts "\nPHASE 2: Generating patch\n\n"
 puts "Library path:\t"  + "#{selected.lib_dir_path}"
 

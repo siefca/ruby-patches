@@ -6,5 +6,6 @@ This patch fixes readline in Ruby so it is possible to type UTF-8 characters fro
 3. Honestly answer questions.
 
 
+
 -- 
 Pawel Wilk <pw@gnu.org>
