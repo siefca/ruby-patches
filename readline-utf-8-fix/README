@@ -1,0 +1,10 @@
+
+This patch fixes readline in Ruby so it is possible to type UTF-8 characters from console.
+
+1. Download this patch to some directory you may write.
+2. Run: ruby ./fix-readline.rb
+3. Honestly answer questions.
+
+
+-- 
+Pawel Wilk <pw@gnu.org>
