@@ -61,7 +61,8 @@ class ReadlinePaths
   end
 
   def get_arg(hash, name, alternative)
-    (hash.respond_to?(:key?) && hash.key?(name)) ? hash_key[name] : alternative
+    p hash.key?(name)
+    return (hash.respond_to?(:key?) && hash.key?(name)) ? hash[name] : alternative
   end
 
   def initialize(include_search, lib_search=nil,
@@ -73,13 +74,15 @@ class ReadlinePaths
 
     @inst_command   = get_arg(args, :inst_command,    inst_command)
     @req_commands   = get_arg(args, :req_commands,    required_commands)
-    @include_search = get_arg(args, :include_search,  include_search)
-    @lib_search     = get_arg(args, :lib_search,      lib_search)
+    @include_search = get_arg(args, :inc_paths,       include_search)
+    @lib_search     = get_arg(args, :lib_paths,       lib_search)
     @name           = get_arg(args, :name,            name)
     @usable         = true
     @cmd_missing    = Array.new
-    @req_commands.split(':').each do |cmd|
+    if !@req_commands.nil?
+      @req_commands.split(':').each do |cmd|
         @cmd_missing << cmd if whereis(cmd, ENV['PATH']).nil?  
+      end
     end
     @usable           = false if not @cmd_missing.empty?
     @include_path     = @include_search.nil?  ? nil : whereis('readline.h', @include_search)
@@ -90,8 +93,12 @@ class ReadlinePaths
 
   def usable?;    @usable && !@inst_command.nil?          end
   def complete?;  !@include_path.nil? && !@lib_path.nil?  end
-  def run_install; system @inst_command                   end
-  def lib_dir_preferred; @lib_search.split(':').shift     end
+  def run_install; usable? ? system(@inst_command) : nil  end
+
+  def lib_dir_preferred
+    return nil if @lib_search.nil?
+    @lib_search.split(':').shift
+  end
 
   def name; @name.to_s;         end
   def to_s; @name.to_s;         end
@@ -142,6 +149,8 @@ shell = ReadlinePaths.new(
                   "/usr/local/readline:/usr/local/readline/include:"      +
                   "/usr/local/realine/include/readline"
 )
+
+p fink
 
 #fink  = ReadlinePaths.new(fink=>inc_paths, fink_lib_paths,
 #                          fink_commands,  fink_inst_command, 'fink')
