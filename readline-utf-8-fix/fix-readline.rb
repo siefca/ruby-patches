@@ -60,21 +60,26 @@ class ReadlinePaths
     return @lib_version < 5 ? nil : libpath_full
   end
 
-  def initialize(include_search, lib_search=nil, verify_commands=nil,
-                inst_command=nil, name=nil)
-    if include_search.kind_of? Hash
+  def get_arg(hash, name, alternative)
+    (hash.respond_to?(:key?) && hash.key?(name)) ? hash_key[name] : alternative
+  end
+
+  def initialize(include_search, lib_search=nil,
+                required_commands=nil, inst_command=nil, name=nil)
+
+    if !include_search.nil? && include_search.respond_to?(:key?)
       args, include_search = include_search, nil
-       
     end
-    @inst_command   = inst_command
-    @include_search = include_search
-    @lib_search     = lib_search
-    @name           = name
+
+    @inst_command   = get_arg(args, :inst_command,    inst_command)
+    @req_commands   = get_arg(args, :req_commands,    required_commands)
+    @include_search = get_arg(args, :include_search,  include_search)
+    @lib_search     = get_arg(args, :lib_search,      lib_search)
+    @name           = get_arg(args, :name,            name)
     @usable         = true
     @cmd_missing    = Array.new
-    verify_commands.split(':').each do |cmd|
+    @req_commands.split(':').each do |cmd|
         @cmd_missing << cmd if whereis(cmd, ENV['PATH']).nil?  
-      end
     end
     @usable           = false if not @cmd_missing.empty?
     @include_path     = @include_search.nil?  ? nil : whereis('readline.h', @include_search)
@@ -83,10 +88,10 @@ class ReadlinePaths
     @include_dir_path = @include_path.nil?    ? nil : File.dirname(@include_path)
   end
 
-  def usable?;    !@usable.nil? && !@inst_command.nil? && @usable == true end
-  def complete?;  !@include_path.nil? && !@lib_path.nil?                  end
-  def run_install; system @inst_command                                   end
-  def lib_dir_preferred; @lib_search.split(':').shift                     end
+  def usable?;    @usable && !@inst_command.nil?          end
+  def complete?;  !@include_path.nil? && !@lib_path.nil?  end
+  def run_install; system @inst_command                   end
+  def lib_dir_preferred; @lib_search.split(':').shift     end
 
   def name; @name.to_s;         end
   def to_s; @name.to_s;         end
@@ -100,40 +105,43 @@ puts "Fix for broken readline in Ruby on Mac OS X (by Pawel Wilk)"
 
 ## search for tools
 
-fink  = ReadlinePaths.new {
-  :commands     =>  "fink:curl",
+fink  = ReadlinePaths.new(
+  :name         =>  "fink",
+  :req_commands =>  "fink:curl",
   :inst_command =>  "sudo port install readline +universal",
   :lib_paths    =>  "/sw/lib:/sw/local/lib:/sw/usr/local/lib:/sw/usr/lib", 
   :inc_paths    =>  "/sw/include/readline:/sw/local/include/readline:"  +
                     "/sw/usr/local/include/readline:/sw/include:"       +
                     "/sw/local/include:/sw/usr/local/include"
-}
+)
 
-port  = ReadlinePaths.new {
-  :commands     =>  "port:curl",
+port  = ReadlinePaths.new(
+  :name         =>  "port",
+  :req_commands =>  "port:curl",
   :inst_command =>  "fink install readline5",
   :lib_paths    =>  "/opt/local/lib:/opt/usr/local/lib:/opt/lib:/opt/usr/lib",
   :inc_paths    =>  "/opt/local/include/readline:/opt/usr/local/include/readline:"    +
                     "/opt/include/readline:/opt/local/include:/opt/usr/local/inlude:" +
                     "/opt/include"
-}
+)
   
-shell = ReadlinePaths.new {
-  :commands     =>  "gcc:rm:mv:make:curl:tar:gzip:sudo:gpg",
+shell = ReadlinePaths.new(
+  :name         =>  "shell script",
+  :req_commands =>  "gcc:rm:mv:make:curl:tar:gzip:sudo:gpg",
 
   :inst_command =>  "cd /tmp && rm -rf rdlnx5 && mkdir rdlnx5 && cd rdlnx5 && "                       +
                     "curl --retry 2 -C - -O http://ftp.gnu.org/gnu/readline/readline-5.2.tar.gz && "  +
                     "tar xzf readline-5.2.tar.gz && ./configure --prefix=/usr/local && "              +
-                    "make && sudo make install"
+                    "make && sudo make install",
 
   :lib_paths  =>  "/usr/local/lib:/usr/local/libexec:/usr/local/lib/lib:" +
                   "/usr/local/readline:/usr/local/readline/lib:"          +
-                  "/usr/local/readline/lib/readline:/usr/readline"
+                  "/usr/local/readline/lib/readline:/usr/readline",
 
   :inc_paths  =>  "/usr/local/include/readline:/usr/local/include:"       +
                   "/usr/local/readline:/usr/local/readline/include:"      +
                   "/usr/local/realine/include/readline"
-}
+)
 
 #fink  = ReadlinePaths.new(fink=>inc_paths, fink_lib_paths,
 #                          fink_commands,  fink_inst_command, 'fink')
@@ -142,7 +150,7 @@ shell = ReadlinePaths.new {
 #                          port_commands, port_inst_command, 'port')
 #
 #shell = ReadlinePaths.new(shell_inc_paths, shell_lib_paths,
-                          shell_commands, shell_inst_command, 'shell script')
+#                          shell_commands, shell_inst_command, 'shell script')
 
 ## seek after completed paths (includes and library)
 
