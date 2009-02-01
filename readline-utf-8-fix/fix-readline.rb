@@ -1,108 +1,314 @@
 #!/usr/bin/env ruby
 
-def whereis(filename, paths)
-  paths.split(':').each do |path|
-	  path = path + '/' + filename
-	  return path if File.exists?(path)
-  end
-  return nil
-end
+# fix yields in choicesdialog!!!
 
-def readlink(filename)
-  return nil if (filename.nil? || filename.empty?)
-  begin
-    real_path = File.readlink(filename)
-  rescue Errno::EINVAL
-    return File.readable?(filename) ? filename : nil
-  rescue
-    return nil
-  else
-    return real_path
-  end
-end
+class Pathnames < Array
 
-def multichoice_dialog(ary, what)
-  choice = nil
-  until !choice.nil? && (1..ary.size) === choice.to_i
-    STDERR.puts " Multiple incarnations of #{what} were found."
-    STDERR.puts " Select one:"
-    STDERR.puts
-    n = 1
-    ary.each do |tool|
-      STDERR.puts "   (#{n}) " + yield(tool)
-      n += 1
+  def initialize(size=0, obj=nil)
+    if size.kind_of?(String) && obj.nil?
+      super()
+      replace(size)
+    else
+      super(size, obj)
     end
-    STDERR.puts
-    STDERR.flush
-    choice = gets
   end
-  return choice
+
+  def replace(other_object)
+    if other_object.kind_of?(String)
+      other_object = other_object.split(':')
+    end
+    super(other_object)
+  end
+
+  def set(pathnames)
+    return if pathnames.nil?
+    replace(pathnames)
+  end
+
+  def expand_paths!
+    fill { |idx| File.expand_path(at(idx)) }
+  end
+
+  def expand_paths
+    new_obj = self.dup
+    new_obj.expand_paths!
+  end
+
+  def to_s
+    self.join(':')
+  end
+
 end
 
-class ReadlinePaths
-  attr_reader :usable, :inst_command, :include_path, :lib_path,
-              :include_search, :lib_search, :lib_version, :cmd_missing,
-              :lib_dir_path, :include_dir_path, :inst_command
+class UnixTool < File
+
+  attr_reader :search_paths
+
+  def initialize(filename, mode=nil, perm=nil, search_paths=nil)
+    super(filename, mode, perm)
+    self.search_paths = search_paths
+  end
+
+  def search_paths=(search_paths=nil)
+    @search_paths = self.class.get_search_paths(search_paths)
+  end
+
+  def whereis(search_paths=nil)
+    self.class.expand_path self.path
+  end
+
+  def follow_link
+    self.class.follow_link(self.path)
+  end
+
+  def self.get_search_paths(search_paths=nil)
+    search_paths = Pathnames.new(ENV['PATH']) if search_paths.nil?
+    if not search_paths.kind_of?(Pathnames)
+      search_paths = Pathnames.new(search_paths)
+    end
+    return search_paths.uniq
+  end
+
+  def self.whereis(filename, search_paths=nil, subdir_search=false)
+    filename = filename.path if filename.respond_to?(:path)
+    return expand_path(filename) if !subdir_search && filename.include?('/')
+    paths = get_search_paths(search_paths)
+    paths.each do |spath|
+      spath = spath + '/' + filename
+      return spath if exists?(spath)
+    end
+    return nil
+  end
+
+  def self.follow_link(filename)
+    return nil if (filename.nil? || filename.empty?)
+    begin
+      real_path = readlink(filename)
+    rescue Errno::EINVAL
+      return readable?(filename) ? filename : nil
+    rescue
+      return nil
+    else
+      return real_path
+    end
+  end
+
+end
+
+class ChoiceDialogs
+
+  def initialize(item_name, objects)
+    @item_name  = item_name
+    @objects    = objects
+  end
+
+  def ask_for_choice
+    choice = nil
+    until !choice.nil? && (1..@objects.size) === choice.to_i
+      STDERR.puts " Multiple incarnations of #{@item_name} were found."
+      STDERR.puts " Select one:"
+      STDERR.puts
+      n = 1
+      @objects.each do |obj|
+        STDERR.puts "   (#{n}) " + yield(obj)
+        n += 1
+      end
+      STDERR.puts
+      STDERR.flush
+      choice = gets
+    end
+    return choice
+  end
+
+  def display_list
+    return nil if @objects.nil?
+    if @objects.size > 1
+      # more than one
+      choice    = ask_for_choice { |t| yield(t) }
+      selected  = @objects[choice.to_i-1]
+    elsif @objects.size == 1
+      # exactly one found
+      selected = @objects.first
+    else
+      # none found
+      selected = nil
+    end
+    return selected
+  end
+
+end
+
+# This class keeps information describing library:
+# found version number, required version number,
+# name, includes directory, library directory and filenames.
+# It's methods can seek for a proper version of library
+# and header files in Mac OS X.
+
+class LibraryPath
+  attr_reader :include_path, :lib_path, :lib_name,
+  :inc_paths, :lib_paths, :lib_version,
+  :lib_dir_path, :include_dir_path,
+  :inc_filename, :lib_filename, :lib_req_ver
 
   def readliblink(filename)
     return nil if (filename.nil? || filename.empty?)
     dirpart = File.dirname filename
-    libpath = readlink filename
+    libpath = UnixTool.follow_link(filename)
     return nil if (libpath.nil? || libpath.empty?)
 
     libpath_full      = File.expand_path(libpath, dirpart)
-    libpath_basename  = File.basename libpath
+    libpath_basename  = File.basename(libpath)
     return nil if (libpath_basename.nil? || libpath_basename.empty?)
 
     ary = libpath_basename.split '.'
     return nil if (ary.nil? || ary.size < 2)
-    @lib_version = ary[1].to_i
-    return @lib_version < 5 ? nil : libpath_full
+    lib_version = ary[1].to_i
+    return libpath_full, lib_version
   end
 
   def get_arg(hash, name, alternative)
-    p hash.key?(name)
     return (hash.respond_to?(:key?) && hash.key?(name)) ? hash[name] : alternative
   end
 
-  def initialize(include_search, lib_search=nil,
-                required_commands=nil, inst_command=nil, name=nil)
-
-    if !include_search.nil? && include_search.respond_to?(:key?)
-      args, include_search = include_search, nil
+  def initialize(inc_paths, lib_paths=nil, lib_req_ver=nil, lib_name=nil)
+    if !inc_paths.nil? && inc_paths.respond_to?(:key?)
+      args, inc_paths = inc_paths, nil
     end
 
-    @inst_command   = get_arg(args, :inst_command,    inst_command)
-    @req_commands   = get_arg(args, :req_commands,    required_commands)
-    @include_search = get_arg(args, :inc_paths,       include_search)
-    @lib_search     = get_arg(args, :lib_paths,       lib_search)
-    @name           = get_arg(args, :name,            name)
-    @usable         = true
-    @cmd_missing    = Array.new
+    @inc_paths    = get_arg(args, :inc_paths,     inc_paths)
+    @lib_paths    = get_arg(args, :lib_paths,     lib_paths)
+    @lib_name     = get_arg(args, :lib_name,      lib_name)
+    @inc_filename = get_arg(args, :inc_filename,  inc_filename)
+    @lib_filename = get_arg(args, :lib_filename,  lib_filename)
+    @lib_req_ver  = get_arg(args, :lib_req_ver,   lib_req_ver)
+
+    @lib_path, @lib_version = @lib_paths.nil? ? nil : readliblink(UnixTool.whereis(@lib_filename, @lib_paths))
+    @include_path     = @inc_paths.nil?     ? nil : UnixTool.whereis(@inc_filename, @inc_paths)
+    @lib_dir_path     = @lib_path.nil?      ? nil : File.dirname(@lib_path)
+    @include_dir_path = @include_path.nil?  ? nil : File.dirname(@include_path)
+  end
+
+  # Returns +true+ if major library version equals required.
+  # It uses triple equality operator, so can test ranges.
+  def version_ok?
+    return true if @lib_req_ver.nil?
+    @lib_req_ver === @lib_version
+  end
+
+  # Returns true if library has been found.
+  # It simply checks whether proper header file
+  # exists and library file exists.
+  def lib_found?
+    !@lib_path.nil?
+  end
+
+  def inc_found?
+    !@include_path.nil?
+  end
+
+  def libfiles_found?
+    lib_found? && inc_found?
+  end
+
+  # Returns true if library has been found
+  # and its version is ok.
+  def lib_ok?
+    libfiles_found? && version_ok?
+  end
+
+  # Creates preferred installation path
+  # for the library using first path
+  # submitted in _lib\_paths_ while
+  # creating new object.
+  def lib_dir_preferred
+    return nil if @lib_paths.nil?
+    @lib_paths.split(':').shift
+  end
+
+  # Returns name of a library.
+  def name; @lib_name.to_s; end
+
+  # Same as name.
+  def to_s; @lib_name.to_s; end
+
+  # Returns 1 if library has been found
+  # and 0 otherwise.
+  def to_i; lib_ok? ? 1 : 0  end
+
+end
+
+# This class adds tool-related information and actions
+# to the class LibraryPath
+
+class Tool < LibraryPath
+
+  attr_reader :inst_command, :req_commands, :cmd_missing, :tool_name
+
+  # Creates new +Tool+ object containing paths for the library
+  # which will initialize fields required by LibraryPath superclass
+  # and information about installation tool, which may manage the
+  # library (package manager).
+  #
+  # _inst\_command_ whould contain a path
+  # to library installation shell commands, _req\_commands_
+  # should contain names of shell commands separated by colons
+  # which are required for installation to succeed,
+  # and _tool\_name_ should contain name of a tool.
+  #
+  # You can also pass all agruments as a hash. Names for keys
+  # should be the same as names of arguments mentioned before.
+
+  def initialize(inst_command, req_commands=nil, tool_name=nil,
+    inc_paths=nil, lib_paths=nil, lib_req_ver=nil, lib_name=nil)
+
+    if !inst_command.nil? && inst_command.respond_to?(:key?)
+      args, inst_command = inst_command, nil
+      args[:inc_paths] = get_arg(args, :inc_paths, inc_paths)
+      super(args, lib_paths, lib_name)
+    else
+      super(inc_paths, lib_paths, lib_name)
+    end
+
+    @tool_name    = get_arg(args, :tool_name,    tool_name)
+    @inst_command = get_arg(args, :inst_command,  inst_command)
+    @req_commands = get_arg(args, :req_commands,  req_commands)
+
+    @cmd_missing  = Array.new
     if !@req_commands.nil?
       @req_commands.split(':').each do |cmd|
-        @cmd_missing << cmd if whereis(cmd, ENV['PATH']).nil?  
+        @cmd_missing << cmd if UnixTool.whereis(cmd).nil?
       end
     end
-    @usable           = false if not @cmd_missing.empty?
-    @include_path     = @include_search.nil?  ? nil : whereis('readline.h', @include_search)
-    @lib_path         = @lib_search.nil?      ? nil : readliblink(whereis('libreadline.dylib', @lib_search))
-    @lib_dir_path     = @lib_path.nil?        ? nil : File.dirname(@lib_path)
-    @include_dir_path = @include_path.nil?    ? nil : File.dirname(@include_path)
   end
 
-  def usable?;    @usable && !@inst_command.nil?          end
-  def complete?;  !@include_path.nil? && !@lib_path.nil?  end
-  def run_install; usable? ? system(@inst_command) : nil  end
-
-  def lib_dir_preferred
-    return nil if @lib_search.nil?
-    @lib_search.split(':').shift
+  # Returns an array containing required commands that are missing or +nil+
+  def missing_commands
+    @cmd_missing.nil? ? nil : @cmd_missing.dup
   end
 
-  def name; @name.to_s;         end
-  def to_s; @name.to_s;         end
-  def to_i; complete? ? 1 : 0   end
+  # Returns true if it is possible to use installation tool.
+  def usable?
+    @cmd_missing.empty? && !@inst_command.nil?
+  end
+
+  # Runs installation command(s) assgined to a tool.
+  def run_install
+    usable? ? system(@inst_command) : nil
+  end
+
+end
+
+# This class keeps tools.
+
+class Tools <Array
+
+  def add(tool);      self << tool      end
+  def remove(tool);   delete(tool)      end
+
+  def usable;         select { |v| v.usable? }          end
+  def unusable;       reject { |v| v.usable? }          end
+  def with_lib_found; select { |v| v.libfiles_found? }  end
+  def with_lib_ok;    select { |v| v.lib_ok? }          end
 
 end
 
@@ -112,115 +318,142 @@ puts "Fix for broken readline in Ruby on Mac OS X (by Pawel Wilk)"
 
 ## search for tools
 
-fink  = ReadlinePaths.new(
-  :name         =>  "fink",
-  :req_commands =>  "fink:curl",
-  :inst_command =>  "sudo port install readline +universal",
-  :lib_paths    =>  "/sw/lib:/sw/local/lib:/sw/usr/local/lib:/sw/usr/lib", 
-  :inc_paths    =>  "/sw/include/readline:/sw/local/include/readline:"  +
-                    "/sw/usr/local/include/readline:/sw/include:"       +
-                    "/sw/local/include:/sw/usr/local/include"
+fink  = Tool.new(
+:tool_name    =>  "fink",
+:lib_name     =>  "readline",
+:lib_req_ver  =>  (5..6),
+:req_commands =>  "fink:curl:git",
+:inst_command =>  "sudo port install readline +universal",
+:lib_paths    =>  "/sw/lib:/sw/local/lib:/sw/usr/local/lib:/sw/usr/lib",
+:inc_paths    =>  "/sw/include/readline:/sw/local/include/readline:"  +
+                  "/sw/usr/local/include/readline:/sw/include:"       +
+                  "/sw/local/include:/sw/usr/local/include",
+:inc_filename =>  "readline.h",
+:lib_filename =>  "libreadline.dylib"
 )
 
-port  = ReadlinePaths.new(
-  :name         =>  "port",
-  :req_commands =>  "port:curl",
-  :inst_command =>  "fink install readline5",
-  :lib_paths    =>  "/opt/local/lib:/opt/usr/local/lib:/opt/lib:/opt/usr/lib",
-  :inc_paths    =>  "/opt/local/include/readline:/opt/usr/local/include/readline:"    +
-                    "/opt/include/readline:/opt/local/include:/opt/usr/local/inlude:" +
-                    "/opt/include"
-)
-  
-shell = ReadlinePaths.new(
-  :name         =>  "shell script",
-  :req_commands =>  "gcc:rm:mv:make:curl:tar:gzip:sudo:gpg",
-
-  :inst_command =>  "cd /tmp && rm -rf rdlnx5 && mkdir rdlnx5 && cd rdlnx5 && "                       +
-                    "curl --retry 2 -C - -O http://ftp.gnu.org/gnu/readline/readline-5.2.tar.gz && "  +
-                    "tar xzf readline-5.2.tar.gz && ./configure --prefix=/usr/local && "              +
-                    "make && sudo make install",
-
-  :lib_paths  =>  "/usr/local/lib:/usr/local/libexec:/usr/local/lib/lib:" +
-                  "/usr/local/readline:/usr/local/readline/lib:"          +
-                  "/usr/local/readline/lib/readline:/usr/readline",
-
-  :inc_paths  =>  "/usr/local/include/readline:/usr/local/include:"       +
-                  "/usr/local/readline:/usr/local/readline/include:"      +
-                  "/usr/local/realine/include/readline"
+port  = Tool.new(
+:tool_name    =>  "port",
+:lib_name     =>  "readline",
+:lib_req_ver  =>  (5..6),
+:req_commands =>  "port:curl:git",
+:inst_command =>  "fink install readline5",
+:lib_paths    =>  "/opt/local/lib:/opt/usr/local/lib:/opt/lib:/opt/usr/lib",
+:inc_paths    =>  "/opt/local/include/readline:/opt/usr/local/include/readline:"    +
+                  "/opt/include/readline:/opt/local/include:/opt/usr/local/inlude:" +
+                  "/opt/include",
+:inc_filename =>  "readline.h",
+:lib_filename =>  "libreadline.dylib"
 )
 
-p fink
+shell = Tool.new(
+:tool_name    =>  "shell script",
+:lib_name     =>  "readline",
+:lib_req_ver  =>  (5..6),
+:req_commands =>  "gcc:rm:mv:make:curl:tar:gzip:sudo:gpg:git:pipi",
 
-#fink  = ReadlinePaths.new(fink=>inc_paths, fink_lib_paths,
-#                          fink_commands,  fink_inst_command, 'fink')
-#                          
-#port  = ReadlinePaths.new(port_inc_paths, port_lib_paths,
-#                          port_commands, port_inst_command, 'port')
-#
-#shell = ReadlinePaths.new(shell_inc_paths, shell_lib_paths,
-#                          shell_commands, shell_inst_command, 'shell script')
+:inst_command =>  "rm -rf ./build && ./mkdir build && cd ./build && "                               +
+                  "curl --retry 2 -C - -O http://ftp.gnu.org/gnu/readline/readline-5.2.tar.gz && "  +
+                  "tar xzf readline-5.2.tar.gz && ./configure --prefix=/usr/local && "              +
+                  "make && sudo make install",
+
+:lib_paths  =>  "/usr/local/lib:/usr/local/libexec:/usr/local/lib/lib:" +
+                "/usr/local/readline:/usr/local/readline/lib:"          +
+                "/usr/local/readline/lib/readline:/usr/readline",
+
+:inc_paths  =>  "/usr/local/include/readline:/usr/local/include:"       +
+                "/usr/local/readline:/usr/local/readline/include:"      +
+                "/usr/local/realine/include/readline",
+
+:inc_filename =>  "readline.h",
+:lib_filename =>  "libreadline.dylib"
+)
+
+native = Tool.new(
+:tool_name    =>  "Mac OS X",
+:lib_name     =>  "readline",
+:lib_req_ver  =>  (5..6),
+:lib_paths    =>  "/usr/lib:/lib:/usr/lib/readline:/usr/lib/readline/lib",
+:inc_paths    =>  "/usr/include/readline:/usr/include",
+:inc_filename =>  "readline.h",
+:lib_filename =>  "libreadline.dylib"
+)
+
+common_build_tools = Tool.new(
+:tool_name    =>  "prerequisites",
+:req_commands =>  "gcc:rm:mv:make:tar:gzip:sudo:gpg:curl",
+:inst_command =>  "echo"
+)
+
+## Check for tools that we need to build the library
+
+puts "\nPHASE 0: Looking for common tools.\n\n"
+
+if not common_build_tools.usable?
+  STDERR.puts "Cannot find common tools required to apply this fix."
+  exit 1
+end
 
 ## seek after completed paths (includes and library)
 
-puts "\nPHASE 1: Looking for readline library.\n\n"
+puts "\nPHASE 1: Looking for library.\n\n"
 
 need_install = false
-tools = Array.new
-tools << fink   if fink.complete?
-tools << port   if port.complete?
-tools << shell  if shell.complete?
 
-if tools.size > 1
-  # more than one library found
-  choice    = multichoice_dialog(tools, "the library") { |t| "Use #{t.lib_path} (managed by #{t.name})" }
-  selected  = tools[choice.to_i-1]
-elsif tools.size == 1
-  # exactly one library found
-  selected  = tools[0]
-else
-  # no library has been found
-  puts "Cannot find any proper version of readline library."
-  puts "I'll try to assist you in building or installing one."
-  puts ""
-  
-  tools.clear
-  tools << fink   if fink.usable?
-  tools << port   if port.usable?
-  tools << shell  if shell.usable?
-  
-  if tools.size > 1
-    # more than one installation tool
-    choice    = multichoice_dialog(tools, "building tool") do |t|
-      "Use #{t.name} (installs readline in #{t.lib_dir_preferred})"
-    end
-    selected  = tools[choice.to_i-1]
-  elsif tools.size == 1
-    # exactly one installation tool
-    selected  = tools[0]
-    puts "The only available method to install readline is to use #{selected.name}."
-  else
-    # should never happen
-    STDERR.puts "I'm sorry but there isn't any tool I can use to install library."
-    return
-  end
-  need_install = true
+tools = Tools.new
+tools.add fink
+tools.add port
+tools.add shell
+tools.add native
+
+choose_readline   = ChoiceDialogs.new('readline library', tools.with_lib_ok)
+choose_installer  = ChoiceDialogs.new('installation tool', tools.usable)
+
+library = choose_readline.display_list do |library|
+  "Use #{library.lib_path} (managed by #{library.tool_name})"
 end
 
-puts "I will use #{selected.name} to integrate library."
+if library.nil?
+  needs_install = true
+  puts "Cannot find any proper version of readline library."
+  puts "I'll try to assist you in building or installing one.\n\n"
+
+  library = choose_installer.display_list do |installer|
+    "Use #{installer.tool_name} (installs #{installer.lib_name} in #{installer.lib_dir_preferred})"
+  end
+  
+  puts "I will use #{library.tool_name} to install readline library." if not library.nil?
+else
+  puts "I've found version #{library.lib_version} of #{library.lib_name} library in #{library.lib_dir_path}"
+end
+
+if library.nil?
+  STDERR.puts "I'm sorry but I cannot use any known tool to install the library."
+  STDERR.puts "Here are commands that were NOT FOUND required by each tool to run:\n\n"
+
+  tools.unusable.each_with_index do |tool,i|
+    if not tool.missing_commands.empty?
+      STDERR.puts " [#{i+1}] #{tool.tool_name} requires: #{tool.missing_commands.join(', ')}"
+    end
+  end
+  STDERR.puts
+
+  exit 1
+end
+
+## Check version
 
 ## Fetch sources
 
 ## Generate patch
 
 puts "\nPHASE 2: Generating patch\n\n"
-puts "Library path:\t"  + "#{selected.lib_dir_path}"
+puts "Library path:\t"  + "#{library.lib_dir_path}"
 
 #
 # @@ -1,4 +1,6 @@
 # require "mkmf"
 #+$CFLAGS << " -I/sw/include "
 #+$LDFLAGS << " -L/sw/lib "
-# 
+#
 # $readline_headers = ["stdio.h"]
-
