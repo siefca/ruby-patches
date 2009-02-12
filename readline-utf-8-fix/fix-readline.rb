@@ -1,5 +1,7 @@
 #!/usr/bin/env ruby
 
+require 'pathname'
+
 class Pathnames < Array
 
   def initialize(size=0, obj=nil)
@@ -14,8 +16,9 @@ class Pathnames < Array
   def replace(other_object)
     if other_object.kind_of?(String)
       other_object = other_object.split(':')
+      other_object.map! { |p| Pathname.new(p) }
     end
-    super(other_object)
+    return super(other_object)
   end
 
   def set(pathnames)
@@ -24,16 +27,32 @@ class Pathnames < Array
   end
 
   def expand_paths!
-    fill { |idx| File.expand_path(at(idx)) }
+    map! { |p| p.expand_path }
   end
 
   def expand_paths
-    new_obj = self.dup
-    new_obj.expand_paths!
+    return map { |p| p.dup.expand_path }
   end
 
   def to_s
-    self.join(':')
+    return self.join(':')
+  end
+
+  def include?(v)
+    if v.kind_of?(String)
+      ary = self.map { |p| p.to_s }
+      return ary.include?(v)
+    else
+      return super(v)
+    end
+  end
+  
+  def delete(obj)
+    if obj.kind_of?(String)
+      return self.delete_if { |p| p.to_s == obj }
+    else
+      return super(v)
+    end    
   end
 
 end
@@ -138,7 +157,7 @@ end
 
 class RequiredCommand
 
-  attr_reader :inst_command, :req_commands, :tool_path
+  attr_reader :inst_command, :req_commands, :tool_path,
               :cmd_missing, :tool_name, :tool_commands, :bin_search_paths
 
   # _tool\_name_ - name of a tool,
@@ -230,10 +249,10 @@ class RequiredLibrary < RequiredCommand
 
 # tool_inst_command has changed meaning!!! it's now about the library, not tool
 
-  def initialize(tool_name, lib_name, lib_req_ver=nil,
+  def initialize(tool_name, lib_name=nil, lib_req_ver=nil,
                  inc_filename=nil, lib_filename=nil,
                  bin_search_paths=nil, lib_search_paths=nil, inc_search_paths=nil,
-                 tool_req_commands=nil, tool_inst_command=nil)
+                 tool_command=nil, tool_req_commands=nil, tool_inst_command=nil)
 
     if tool_name.respond_to?(:key?)
       args, tool_name = tool_name, nil
@@ -242,7 +261,7 @@ class RequiredLibrary < RequiredCommand
       super(tool_name, tool_command, tool_req_commands, tool_inst_command, bin_search_paths)
     end
 
-    @inc_paths    = get_arg(args, :inc_paths,     inc_paths)
+    @inc_search_paths = get_arg(args, :inc_search_paths,     inc_search_paths)
     #new: @search_paths @lib_paths    = get_arg(args, :lib_paths,     lib_paths)
     @lib_name     = get_arg(args, :lib_name,      lib_name)
     @inc_filename = get_arg(args, :inc_filename,  inc_filename)
@@ -263,7 +282,7 @@ class RequiredLibrary < RequiredCommand
       @lib_path = @lib_version = nil
     end
     
-    @include_path     = @inc_paths.nil?     ? nil : UnixTool.whereis(@inc_filename, @inc_paths)
+    @include_path     = @inc_search_paths.nil?     ? nil : UnixTool.whereis(@inc_filename, @inc_search_paths)
     @lib_dir_path     = @lib_path.nil?      ? nil : File.dirname(@lib_path)
     @include_dir_path = @include_path.nil?  ? nil : File.dirname(@include_path)
   end
@@ -356,35 +375,35 @@ puts "Fix for broken readline in Ruby on Mac OS X (by Pawel Wilk)"
 
 ## search for tools
 
-fink  = Tool.new(
+fink  = RequiredLibrary.new(
 :tool_name    =>  "fink",
 :lib_name     =>  "readline",
 :lib_req_ver  =>  (5..6),
 :req_commands =>  "fink",
 :inst_command =>  "fink install readline5",
 :lib_paths    =>  "/sw/lib:/sw/local/lib:/sw/usr/local/lib:/sw/usr/lib",
-:inc_paths    =>  "/sw/include/readline:/sw/local/include/readline:"  +
+:inc_search_paths    =>  "/sw/include/readline:/sw/local/include/readline:"  +
                   "/sw/usr/local/include/readline:/sw/include:"       +
                   "/sw/local/include:/sw/usr/local/include",
 :inc_filename =>  "readline.h",
 :lib_filename =>  "libreadline.dylib"
 )
 
-port  = Tool.new(
+port  = RequiredLibrary.new(
 :tool_name    =>  "port",
 :lib_name     =>  "readline",
 :lib_req_ver  =>  (5..6),
 :req_commands =>  "port:sudo",
 :inst_command =>  "sudo port install readline +universal",
 :lib_paths    =>  "/opt/local/lib:/opt/usr/local/lib:/opt/lib:/opt/usr/lib",
-:inc_paths    =>  "/opt/local/include/readline:/opt/usr/local/include/readline:"    +
+:inc_search_paths    =>  "/opt/local/include/readline:/opt/usr/local/include/readline:"    +
                   "/opt/include/readline:/opt/local/include:/opt/usr/local/inlude:" +
                   "/opt/include",
 :inc_filename =>  "readline.h",
 :lib_filename =>  "libreadline.dylib"
 )
 
-shell = Tool.new(
+shell = RequiredLibrary.new(
 :tool_name    =>  "shell script",
 :lib_name     =>  "readline",
 :lib_req_ver  =>  (5..6),
@@ -399,7 +418,7 @@ shell = Tool.new(
                 "/usr/local/readline:/usr/local/readline/lib:"          +
                 "/usr/local/readline/lib/readline:/usr/readline",
 
-:inc_paths  =>  "/usr/local/include/readline:/usr/local/include:"       +
+:inc_search_paths  =>  "/usr/local/include/readline:/usr/local/include:"       +
                 "/usr/local/readline:/usr/local/readline/include:"      +
                 "/usr/local/realine/include/readline",
 
@@ -407,12 +426,12 @@ shell = Tool.new(
 :lib_filename =>  "libreadline.dylib"
 )
 
-native = Tool.new(
+native = RequiredLibrary.new(
 :tool_name    =>  "Mac OS X",
 :lib_name     =>  "readline",
 :lib_req_ver  =>  (5..6),
 :lib_paths    =>  "/usr/lib:/lib:/usr/lib/readline:/usr/lib/readline/lib:/System/Library/Frameworks:/Library/Frameworks",
-:inc_paths    =>  "/usr/include/readline:/usr/include",
+:inc_search_paths    =>  "/usr/include/readline:/usr/include",
 :inc_filename =>  "readline.h",
 :lib_filename =>  "libreadline.dylib"
 )
@@ -424,23 +443,23 @@ common_build_tools = Tool.new(
 )
 
 build_tools_shell = Tools.new [
-  Tool.new("Tape ARchiver",     "tar"),
-  Tool.new("GNU make",          "make"),
-  Tool.new("GNU C Compiler",    "gcc"),
-  Tool.new("GNU Privacy Guard", "gpg"),
-  Tool.new("CURL", "curl")
+  RequiredCommand.new("Tape ARchiver",     "tar"),
+  RequiredCommand.new("GNU make",          "make"),
+  RequiredCommand.new("GNU C Compiler",    "gcc"),
+  RequiredCommand.new("GNU Privacy Guard", "gpg"),
+  RequiredCommand.new("CURL", "curl")
 ]
 
 build_tools_fink = Tools.new [
-  Tool.new("Tape ARchiver",   "tar",  "fink", "fink install tar"),
-  Tool.new("GNU make",        "make", "fink", "fink install make"),
-  Tool.new("GNU C Compiler",  "gcc",  "fink", "fink install gcc4"),
+  RequiredCommand.new("Tape ARchiver",   "tar",  "fink", "fink install tar"),
+  RequiredCommand.new("GNU make",        "make", "fink", "fink install make"),
+  RequiredCommand.new("GNU C Compiler",  "gcc",  "fink", "fink install gcc4"),
 ]
 
 build_tools_port = Tools.new [
-  Tool.new("Tape ARchiver",   "tar",  "port:sudo", "sudo port install tar"),
-  Tool.new("GNU make",        "make", "port:sudo", "sudo port install make"),
-  Tool.new("GNU C Compiler",  "gcc",  "port:sudo", "sudo port install gcc43"),
+  RequiredCommand.new("Tape ARchiver",   "tar",  "port:sudo", "sudo port install tar"),
+  RequiredCommand.new("GNU make",        "make", "port:sudo", "sudo port install make"),
+  RequiredCommand.new("GNU C Compiler",  "gcc",  "port:sudo", "sudo port install gcc43"),
 ]
 
 ## Check for tools that we need to build the library
@@ -464,14 +483,14 @@ puts "\nPHASE 1: Looking for library.\n\n"
 
 need_install = false
 
-tools = Tools.new
-tools.add fink
-tools.add port
-tools.add shell
-tools.add native
+managed_libs = Tools.new
+managed_libs.add fink
+managed_libs.add port
+managed_libs.add shell
+managed_libs.add native
 
-choose_readline   = ChoiceDialogs.new('readline library', tools.with_lib_ok)
-choose_installer  = ChoiceDialogs.new('installation tool', tools.usable)
+choose_readline   = ChoiceDialogs.new('readline library', managed_libs.with_lib_ok)
+choose_installer  = ChoiceDialogs.new('installation tool', managed_libs.usable)
 
 library = choose_readline.display_list do |library|
   "Use #{library.lib_path} (managed by #{library.tool_name})"
@@ -493,7 +512,7 @@ if library.nil?
   STDERR.puts "I'm sorry but I cannot use any known tool to install the library."
   STDERR.puts "Here are commands that were NOT FOUND required by each tool to run:\n\n"
 
-  tools.unusable.each_with_index do |tool,i|
+  managed_libs.unusable.each_with_index do |tool,i|
     if not tool.missing_commands.empty?
       STDERR.puts " [#{i+1}] #{tool.tool_name} requires: #{tool.missing_commands.join(', ')}"
     end
@@ -502,7 +521,6 @@ if library.nil?
 
   exit 1
 elsif needs_install
-  build_tools = Tools.new
   puts "I will use #{library.tool_name} to install readline library." if not library.nil?
   if (library == fink || library == port)
     build_tools.add << gcc
